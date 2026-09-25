@@ -441,6 +441,784 @@ $('#speedRange').addEventListener('input', e => {
 });
 
 $('#strategyModal').addEventListener('click', (e) => { if (e.target.id === 'strategyModal') closeStrategyModal(); });
+// ---------------------------------------------------------------------------
+// BOT ACTIONS — UPLOAD, FREE BOTS, EDITOR, QUICK STRATEGY
+// ---------------------------------------------------------------------------
+
+function openBotUpload(){
+
+  const input =
+    $('#botUploadInput');
+
+  if (!input){
+
+    toast(
+      'Bot upload control is missing from the page.'
+    );
+
+    return;
+
+  }
+
+  input.value = '';
+
+  input.click();
+
+}
+
+
+// ---------------------------------------------------------------------------
+// NORMALIZE IMPORTED STRATEGY
+// ---------------------------------------------------------------------------
+
+function normalizeImportedStrategy(raw){
+
+  const source =
+    raw || {};
+
+
+  const pick = (...keys) => {
+
+    for (const key of keys){
+
+      if (
+        source[key] !== undefined &&
+        source[key] !== null &&
+        source[key] !== ''
+      ){
+
+        return source[key];
+
+      }
+
+    }
+
+    return undefined;
+
+  };
+
+
+  const symbol =
+    String(
+      pick(
+        'symbol',
+        'market',
+        'asset',
+        'contract'
+      ) || 'R_75'
+    ).toUpperCase();
+
+
+  const direction =
+    String(
+      pick(
+        'direction',
+        'type',
+        'tradeDirection'
+      ) || 'RISE'
+    ).toUpperCase();
+
+
+  const execution =
+    String(
+      pick(
+        'execution',
+        'mode'
+      ) || 'simulated'
+    ).toLowerCase();
+
+
+  return {
+
+    symbol:
+      [
+        'R_75',
+        'BOOM500',
+        'CRASH500'
+      ].includes(symbol)
+        ? symbol
+        : 'R_75',
+
+
+    direction:
+      direction === 'FALL'
+        ? 'FALL'
+        : 'RISE',
+
+
+    stake:
+      Math.max(
+        1,
+        Number(
+          pick(
+            'stake',
+            'amount',
+            'stakePerTrade'
+          ) || 10
+        )
+      ),
+
+
+    takeProfit:
+      Math.max(
+        0,
+        Number(
+          pick(
+            'takeProfit',
+            'take_profit',
+            'tp'
+          ) || 20
+        )
+      ),
+
+
+    stopLoss:
+      Math.max(
+        0,
+        Number(
+          pick(
+            'stopLoss',
+            'stop_loss',
+            'sl'
+          ) || 15
+        )
+      ),
+
+
+    execution:
+      execution === 'deriv'
+        ? 'deriv'
+        : 'simulated'
+
+  };
+
+}
+
+
+// ---------------------------------------------------------------------------
+// XML IMPORT
+// ---------------------------------------------------------------------------
+
+function xmlToObject(xmlText){
+
+  const doc =
+    new DOMParser().parseFromString(
+      xmlText,
+      'application/xml'
+    );
+
+
+  if (
+    doc.querySelector(
+      'parsererror'
+    )
+  ){
+
+    throw new Error(
+      'Invalid XML file.'
+    );
+
+  }
+
+
+  const out = {};
+
+
+  const read = (name) => {
+
+    const el =
+      doc.querySelector(name);
+
+
+    return el
+      ? (
+          el.getAttribute('value') ||
+          el.textContent ||
+          ''
+        ).trim()
+      : undefined;
+
+  };
+
+
+  out.symbol =
+    read('symbol') ||
+    read('market') ||
+    read('asset');
+
+
+  out.direction =
+    read('direction') ||
+    read('type');
+
+
+  out.stake =
+    read('stake') ||
+    read('amount');
+
+
+  out.takeProfit =
+    read('takeProfit') ||
+    read('take-profit') ||
+    read('tp');
+
+
+  out.stopLoss =
+    read('stopLoss') ||
+    read('stop-loss') ||
+    read('sl');
+
+
+  out.execution =
+    read('execution') ||
+    read('mode');
+
+
+  // Accept attributes on the root <strategy> element.
+
+  const root =
+    doc.documentElement;
+
+
+  if (root){
+
+    for (
+      const key of [
+        'symbol',
+        'market',
+        'asset',
+        'direction',
+        'stake',
+        'amount',
+        'takeProfit',
+        'take_profit',
+        'tp',
+        'stopLoss',
+        'stop_loss',
+        'sl',
+        'execution',
+        'mode'
+      ]
+    ){
+
+      if (
+        out[key] === undefined &&
+        root.getAttribute(key) !== null
+      ){
+
+        out[key] =
+          root.getAttribute(key);
+
+      }
+
+    }
+
+  }
+
+
+  return out;
+
+}
+
+
+// ---------------------------------------------------------------------------
+// HANDLE BOT UPLOAD
+// ---------------------------------------------------------------------------
+
+async function handleBotUpload(event){
+
+  const file =
+    event?.target?.files?.[0];
+
+
+  if (!file){
+
+    return;
+
+  }
+
+
+  try {
+
+    const text =
+      await file.text();
+
+
+    let imported;
+
+
+    // JSON bot
+
+    if (
+      file.name
+        .toLowerCase()
+        .endsWith('.json')
+    ){
+
+      imported =
+        JSON.parse(text);
+
+
+      // Accept:
+
+      // { ...strategy }
+
+      // OR
+
+      // { strategy: {...} }
+
+      imported =
+        imported.strategy ||
+        imported;
+
+    }
+
+
+    // XML bot
+
+    else {
+
+      imported =
+        xmlToObject(text);
+
+    }
+
+
+    const payload =
+      normalizeImportedStrategy(
+        imported
+      );
+
+
+    const res =
+      await fetch(
+        '/api/strategies',
+        {
+
+          method:
+            'POST',
+
+          headers: {
+            'Content-Type':
+              'application/json'
+          },
+
+          body:
+            JSON.stringify(
+              payload
+            )
+
+        }
+      );
+
+
+    const data =
+      await res
+        .json()
+        .catch(
+          () => ({})
+        );
+
+
+    if (!res.ok){
+
+      toast(
+        data.error ||
+        'Could not import this bot.'
+      );
+
+      return;
+
+    }
+
+
+    strategies.push(
+      data.strategy
+    );
+
+
+    renderStrategies();
+
+
+    setActiveStrategy(
+      data.strategy.id
+    );
+
+
+    toast(
+      `Bot "${file.name}" imported and set active.`
+    );
+
+
+  } catch (err){
+
+    console.error(err);
+
+
+    toast(
+      err.message ||
+      'Could not read the bot file.'
+    );
+
+  }
+
+}
+
+
+// ---------------------------------------------------------------------------
+// FREE BOTS
+// ---------------------------------------------------------------------------
+
+function openFreeBots(){
+
+  const presets = [
+
+    {
+      name:
+        'Volatility Rise Demo',
+
+      symbol:
+        'R_75',
+
+      direction:
+        'RISE',
+
+      stake:
+        10,
+
+      takeProfit:
+        20,
+
+      stopLoss:
+        15,
+
+      execution:
+        'simulated'
+    },
+
+
+    {
+      name:
+        'Boom 500 Rise Demo',
+
+      symbol:
+        'BOOM500',
+
+      direction:
+        'RISE',
+
+      stake:
+        10,
+
+      takeProfit:
+        20,
+
+      stopLoss:
+        15,
+
+      execution:
+        'simulated'
+    },
+
+
+    {
+      name:
+        'Crash 500 Fall Demo',
+
+      symbol:
+        'CRASH500',
+
+      direction:
+        'FALL',
+
+      stake:
+        10,
+
+      takeProfit:
+        20,
+
+      stopLoss:
+        15,
+
+      execution:
+        'simulated'
+    }
+
+  ];
+
+
+  const list =
+    $('#strategyList');
+
+
+  if (!list){
+
+    openStrategyModal();
+
+    return;
+
+  }
+
+
+  list.innerHTML =
+    presets
+      .map(
+        (p, i) => `
+
+          <div class="strategy-item">
+
+            <span>
+
+              <b>
+                ${p.name}
+              </b>
+
+              ·
+
+              ${labelSymbol(
+                p.symbol
+              )}
+
+              ·
+
+              ${p.direction}
+
+              ·
+
+              ${p.stake}
+              stake
+
+              ·
+
+              DEMO
+
+            </span>
+
+
+            <button
+              class="use-btn"
+              onclick="useFreeBot(${i})"
+            >
+              Use
+            </button>
+
+          </div>
+
+        `
+      )
+      .join('');
+
+
+  window.__freeBotPresets =
+    presets;
+
+
+  openStrategyModal();
+
+
+  toast(
+    'Choose a free demo bot below.'
+  );
+
+}
+
+
+// ---------------------------------------------------------------------------
+// USE FREE BOT
+// ---------------------------------------------------------------------------
+
+async function useFreeBot(index){
+
+  const p =
+    window.__freeBotPresets?.[index];
+
+
+  if (!p){
+
+    return;
+
+  }
+
+
+  try {
+
+    const res =
+      await fetch(
+        '/api/strategies',
+        {
+
+          method:
+            'POST',
+
+          headers: {
+            'Content-Type':
+              'application/json'
+          },
+
+          body:
+            JSON.stringify(p)
+
+        }
+      );
+
+
+    const data =
+      await res
+        .json()
+        .catch(
+          () => ({})
+        );
+
+
+    if (!res.ok){
+
+      toast(
+        data.error ||
+        'Could not activate free bot.'
+      );
+
+      return;
+
+    }
+
+
+    strategies.push(
+      data.strategy
+    );
+
+
+    renderStrategies();
+
+
+    setActiveStrategy(
+      data.strategy.id
+    );
+
+
+    toast(
+      'Free bot saved and activated.'
+    );
+
+
+  } catch (e){
+
+    console.error(e);
+
+
+    toast(
+      'Could not activate free bot.'
+    );
+
+  }
+
+}
+
+
+// ---------------------------------------------------------------------------
+// BOT EDITOR
+// ---------------------------------------------------------------------------
+
+function openBotEditor(){
+
+  openStrategyModal();
+
+
+  toast(
+    'Bot Editor opened. Configure your market, direction, stake and risk settings.'
+  );
+
+}
+
+
+// ---------------------------------------------------------------------------
+// QUICK STRATEGY
+// ---------------------------------------------------------------------------
+
+function openQuickStrategy(){
+
+  openStrategyModal();
+
+
+  const symbol =
+    $('#stSymbol');
+
+
+  const direction =
+    $('#stDirection');
+
+
+  const execution =
+    $('#stExecution');
+
+
+  const stake =
+    $('#stStake');
+
+
+  const tp =
+    $('#stTakeProfit');
+
+
+  const sl =
+    $('#stStopLoss');
+
+
+  if (symbol){
+
+    symbol.value =
+      'R_75';
+
+  }
+
+
+  if (direction){
+
+    direction.value =
+      'RISE';
+
+  }
+
+
+  if (execution){
+
+    execution.value =
+      'simulated';
+
+  }
+
+
+  if (stake){
+
+    stake.value =
+      10;
+
+  }
+
+
+  if (tp){
+
+    tp.value =
+      20;
+
+  }
+
+
+  if (sl){
+
+    sl.value =
+      15;
+
+  }
+
+
+  onExecutionChange();
+
+
+  toast(
+    'Quick Strategy template loaded. Press Save strategy to activate it.'
+  );
+
+}
 
 loadStrategies();
 fetch('/api/health').catch(() => {});
